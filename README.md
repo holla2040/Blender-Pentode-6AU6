@@ -1,5 +1,9 @@
 # Interactive Pentode Simulation (Blender) — 6AU6
 
+> **Start here → [LESSONS.md](LESSONS.md)** — a guided 14-lesson path through
+> all four simulations in this repo, from thermionic emission to bias choice
+> and distortion character in audio and guitar amplifier stages.
+
 The follow-on to [Blender-Triode-6SN7](https://github.com/holla2040/Blender-Triode-6SN7):
 a physically-motivated teaching model of a **pentode**, with the screen grid,
 suppressor grid, secondary emission, and a **tetrode-mode toggle** so students

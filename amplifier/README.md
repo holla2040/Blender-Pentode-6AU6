@@ -1,5 +1,8 @@
 # Pentode (6AU6) Common-Cathode Amplifier (Blender)
 
+> Lessons 5–7 and 10–11 of the repo's guided course use this bench:
+> **[LESSONS.md](../LESSONS.md)**.
+
 The [pentode simulation](../README.md) wired into the classic RC-coupled
 stage — the same bench as the
 [triode amplifier](https://github.com/holla2040/Blender-Triode-6SN7/tree/main/amplifier),

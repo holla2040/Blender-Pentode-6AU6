@@ -1,5 +1,8 @@
 # Pentode Cathode-Bias Amplifier (Blender) — the complete 6AU6 stage
 
+> Lessons 9, 13, and 14 of the repo's guided course use this bench:
+> **[LESSONS.md](../LESSONS.md)**.
+
 The capstone of the tube series: the [screen-resistor amplifier](../amplifier/README.md)
 with **cathode self-bias** added — every resistor a real 6AU6 preamp
 schematic has, and **no bias supplies anywhere**.

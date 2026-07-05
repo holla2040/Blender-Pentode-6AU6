@@ -792,13 +792,15 @@ def _pc_y(ma):
 
 def _pc_model_ma(vps, vg1, vg2, cf=None):
     """The solver's companion model, vectorized over plate voltage, in mA.
-    Pass cf to pin the space-charge term (the reference family must be
-    truly static; only the live curve uses the breathing value)."""
+    DISPLAY curves use the slow calibration copy and a pinned/slow space
+    charge -- the plotted characteristics must move with Vg1/Vg2 only, not
+    jitter with per-frame calibration noise."""
     S = _S
     if cf is None:
-        cf = S.get("cf", 0.0)
+        cf = S.get("cf_slow", 0.5)
+    k = S.get("khat_slow", 0.0) or S.get("khat", 0.0)
     d = np.maximum(0.0, vg1 + vg2 / MU2 + vps / MUP - V_SC * cf)
-    ik = S.get("khat", 0.0) * S.get("emis", 1.0) * d ** 1.5
+    ik = k * S.get("emis", 1.0) * d ** 1.5
     ip = ik * (1.0 - S.get("sfrac", 0.35)) * np.minimum(1.0, vps / V_KNEE) ** 0.8
     return ip * MA_PER_E
 
@@ -835,14 +837,12 @@ def _update_load_line(scene=None):
 
 
 def _push_curves(scene):
-    """Per-frame: reference family, live curve, op-point dot, Vg2 readout."""
+    """Per-frame: the family (at the live screen voltage), dot, Vg2 readout."""
     S = _S
+    vg2_now = S.get("vg2", 150.0)
     for i, ec1 in enumerate(PC_FAMILY_EC1):
-        ys = _pc_model_ma(PC_VPS_F, ec1, PC_FAMILY_VG2, cf=0.5)
+        ys = _pc_model_ma(PC_VPS_F, ec1, vg2_now, cf=S.get("cf_slow", 0.5))
         _write_pc_spline(f"FamCurve{i}", _pc_x(PC_VPS_F), _pc_y(ys))
-    ys = _pc_model_ma(PC_VPS, S.get("vg1", 0.0), S.get("vg2", 150.0),
-                      cf=S.get("cf_slow", 0.5))
-    _write_pc_spline("LiveCurve", _pc_x(PC_VPS), _pc_y(ys))
     dot = _ob("OpDot")
     if dot is not None:
         vp = S.get("vp", 300.0)
@@ -891,19 +891,17 @@ def _build_tracer():
     grat.parent = root
     grat.data.materials.append(_emission("MatGraticule", (0.1, 0.45, 0.18), 0.7))
 
-    # reference family (page-3 look), live curve, load line
-    fam_mat = _emission("MatFamily", (0.14, 0.55, 0.22), 1.1)
+    # ONE family (Ec1 = 0..-5 V) drawn at the INSTANTANEOUS screen voltage:
+    # the plot lines themselves move with Vg2 -- a lot with the bypass cap
+    # out, barely at all with it in. The dot walks the static load line
+    # between the lines with the grid swing (the classic reading).
+    fam_mat = _emission("MatFamily", (0.18, 0.75, 0.28), 1.6)
     for i in range(len(PC_FAMILY_EC1)):
         pts = [(x, -0.02, 0.0) for x in _pc_x(PC_VPS_F)]
-        c = _poly_curve(f"FamCurve{i}", pts, 0.006)
+        c = _poly_curve(f"FamCurve{i}", pts, 0.008)
         c.data.use_fill_caps = False
         c.parent = root
         c.data.materials.append(fam_mat)
-    pts = [(x, -0.02, 0.0) for x in _pc_x(PC_VPS)]
-    live = _poly_curve("LiveCurve", pts, 0.013)
-    live.data.use_fill_caps = False
-    live.parent = root
-    live.data.materials.append(_emission("MatTraceOut", (1.0, 0.6, 0.12), 4.0))
     ll = _poly_curve("LoadLine", [(-PC_W / 2, -0.02, 0.0),
                                   (PC_W / 2, -0.02, 0.0)], 0.010)
     ll.data.use_fill_caps = False
@@ -919,15 +917,15 @@ def _build_tracer():
     dot.data.materials.append(_emission("MatOpDot", (1.0, 0.25, 0.2), 6.0))
 
     rot_txt = (math.radians(90), 0, 0)
-    green = _emission("MatFamily", (0.14, 0.55, 0.22), 1.1)
+    green = _emission("MatFamily", (0.18, 0.75, 0.28), 1.6)
     amber = _emission("MatTraceOut", (1.0, 0.6, 0.12), 4.0)
     white = _emission("MatLoadLine", (0.92, 0.92, 1.0), 3.0)
     _text("TracerTitle", "PLATE CHARACTERISTICS", 0.14, (-1.55, -0.03, 1.48),
           rot_txt, white, parent=root)
-    _text("PCVg2Val", "Vg2 = --- V", 0.15, (0.55, -0.03, -1.62), rot_txt,
-          amber, parent=root)
-    _text("PCFamLbl", "Ec1 0..-5V @ Vg2=150V", 0.10, (-1.65, -0.03, -1.62),
+    _text("PCVg2Val", "Vg2 = --- V", 0.15, (0.55, -0.03, -1.62),
           rot_txt, green, parent=root)
+    _text("PCFamLbl", "Ec1 0..-5V (family moves w/ Vg2)", 0.10,
+          (-1.65, -0.03, -1.62), rot_txt, green, parent=root)
     _text("PCMkX0", "0", 0.09, (-1.55, -0.02, -1.33), rot_txt, white,
           parent=root)
     _text("PCMkX1", "500V (50/div)", 0.09, (0.55, -0.02, -1.33), rot_txt,
@@ -974,7 +972,9 @@ def _step(scene):
     # the model knows about emission, so a cold cathode solves to Vp=Vg2=B+
     emis = min(1.0, math.exp(-T_SLOPE * (1.0 / T - 1.0 / T_REF)))
     S["cf"] = cf
-    S["cf_slow"] += 0.02 * (cf - S["cf_slow"])
+    # tau ~8 s: far below the signal band, so cloud ripple (the cloud swells
+    # near cutoff every cycle) cannot leak into the family or the DC ref
+    S["cf_slow"] += 0.005 * (cf - S["cf_slow"])
     S["emis"] = emis
 
     def _model(vp, vg2, vg1, cfx):
@@ -1010,26 +1010,41 @@ def _step(scene):
     # those ring against the transit delay). The bypass cap decides only which
     # grid voltage the SCREEN line sees: the DC bias (bypassed: capacitor
     # holds the average, no signal ripple) or the live signal (unbypassed).
-    # DC reference point. It anchors the calibration (pairing the averaged
-    # current with an instantaneous drive Jensen-biases K, and a K rippling
-    # at signal frequency would shake the "bypassed" screen node) and it is
-    # the voltage the bypass capacitor holds. The reference is solved with a
-    # SLOW copy of the calibration -- khat itself still carries signal-band
-    # jitter through the smoothed current, and a truly bypassed screen must
-    # not see any of it.
-    S["khat_slow"] += 0.02 * (S["khat"] - S["khat_slow"])
+    # ALL circuit solves (both modes) run on a STEADY copy of the
+    # calibration and space charge: the live khat random-walks a few percent
+    # with particle noise, and the steep screen line turns that into ~10 V
+    # of Vg2 wander -- bypassed and unbypassed would disagree at A=0 by
+    # whatever the wander happens to be. The live khat is only the
+    # accumulator; the circuit sees its slow average. Fast bootstrap so a
+    # fresh build still comes up in seconds.
+    # bootstrap fast to 70%, then crawl (tau ~8 s). No band-chasing: under
+    # drive khat carries signal-band ripple, and any fast-follow condition
+    # would hand that ripple to the solves (family breathing with Vg1).
+    a_s = 0.05 if S["khat_slow"] < 0.7 * S["khat"] else 0.005
+    S["khat_slow"] += a_s * (S["khat"] - S["khat_slow"])
     _k_live = S["khat"]
     S["khat"] = S["khat_slow"]
     vg2_ref = _solve_vg2(scene.pcv_sig_dc, S["cf_slow"])
     vp_ref = _solve_vp(vg2_ref, scene.pcv_sig_dc, S["cf_slow"])
+    if scene.pcv_g2_bypass:
+        # Fully bypassed: the capacitor supplies the ripple current, so the
+        # screen node HOLDS the DC value (pole far below the operating
+        # frequency); the low-pass is the cap recharging on slider moves.
+        if S["vg2_byp"] is None:
+            S["vg2_byp"] = vg2_ref
+        S["vg2_byp"] += 0.008 * (vg2_ref - S["vg2_byp"])
+        vg2_sol = S["vg2_byp"]
+    else:
+        vg2_sol = _solve_vg2(Vg1, S["cf_slow"])
+    vp_sol = _solve_vp(vg2_sol, Vg1, S["cf_slow"])
     S["khat"] = _k_live
+
     d_dc = max(0.0, scene.pcv_sig_dc + vg2_ref / MU2 + vp_ref / MUP
                - V_SC * S["cf_slow"])
     # Unbiased perveance estimate: pair the averaged current with the
     # equally-averaged drive^1.5. Pairing it with the DC drive rectifies
     # (the ^1.5 nonlinearity makes <d(t)^1.5> > d_dc^1.5 under signal),
-    # which inflated K under drive and made the "constant" bypassed screen
-    # creep downward cycle after cycle.
+    # which inflated K under drive and crept the operating point.
     d_now = max(0.0, Vg1 + S["vg2"] / MU2 + S["vp"] / MUP - V_SC * cf)
     S["d15_loop"] += IK_LOOP_ALPHA * (d_now ** 1.5 - S["d15_loop"])
     if emis > 0.2 and d_dc > 0.5 and S["d15_loop"] > 0.3:
@@ -1045,21 +1060,6 @@ def _step(scene):
         if d_dc > 1.5 and S["ik_loop"] > 5.0 and S["vp"] > 80.0:
             r_inst = S["ig2_loop"] / S["ik_loop"]
             S["sfrac"] += SF_ALPHA * (min(max(r_inst, 0.15), 0.42) - S["sfrac"])
-
-    if scene.pcv_g2_bypass:
-        # Fully bypassed: the capacitor supplies the ripple current, so the
-        # screen node simply HOLDS its DC value (the pole sits far below the
-        # operating frequency). The gentle low-pass only governs recharging
-        # when the sliders move the DC point itself.
-        if S["vg2_byp"] is None:
-            S["vg2_byp"] = vg2_ref
-        # tau ~ 5 s: a properly-sized capacitor also absorbs the slow
-        # calibration wander, not just signal-frequency ripple
-        S["vg2_byp"] += 0.008 * (vg2_ref - S["vg2_byp"])
-        vg2_sol = S["vg2_byp"]
-    else:
-        vg2_sol = _solve_vg2(Vg1)
-    vp_sol = _solve_vp(vg2_sol, Vg1)
 
     S["vg2"] += VP_SMOOTH * (vg2_sol - S["vg2"])
     S["vp"] += VP_SMOOTH * (vp_sol - S["vp"])
@@ -1481,7 +1481,7 @@ def selfcheck():
     assert S["vp"] > 0.97 * 300 and S["vg2"] > 0.97 * 300, (
         f"cold but Vp={S['vp']:.0f} Vg2={S['vg2']:.0f}")
 
-    S = run(1100, -3, 0, 300, 100, 470, 700, byp=False)  # settle (no cap lag)
+    S = run(1100, -3, 0, 300, 100, 470, 1500, byp=False)  # settle: khat_slow crawl needs ~1400f
     # (long: calibration persists across resets, so the starting K can be
     # far from this op point's value after other runs)
     vp0, vg20 = S["vp"], S["vg2"]
