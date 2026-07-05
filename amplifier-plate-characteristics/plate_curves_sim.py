@@ -26,6 +26,7 @@ Suppressor is permanently connected in this build. Open the "Plate Curves"
 tab (N key), Run / Pause, drag sliders live. Stateful sim: use Reset.
 """
 import math
+from collections import deque
 
 import bpy
 import bmesh
@@ -83,8 +84,14 @@ MA_PER_E = 0.02                # mA per electron/frame -- real-tube range so V =
 # ------------- circuit -------------------------------------------------------
 FREQ = 0.25                    # generator frequency [Hz]; fixed for now
 K_ALPHA = 0.06                 # perveance calibration EMA (slow, out of signal band)
-SF_ALPHA = 0.02                # screen-fraction calibration EMA
+SF_ALPHA = 0.01                # screen-fraction calibration EMA (halved from
+                               # 0.02: sfrac endpoint scatter of +-0.01 maps to
+                               # ~5 V on the screen load line and dominated the
+                               # bypassed/unbypassed A=0 Vg2 agreement)
 IK_LOOP_ALPHA = 0.05           # smoothed measured currents feeding calibration
+D15_DELAY = 24                 # frames the estimator's drive is delayed to match
+                               # the measured drive->arrival transport lag
+                               # (electron transit + cloud response; see below)
 VP_SMOOTH = 0.5                # light smoothing of the solved voltages
 SCOPE_N = 192                  # scope buffer (2 cycles at 0.25 Hz, 24 fps)
 SCOPE_XS = np.linspace(-1.28, 1.28, SCOPE_N)
@@ -363,7 +370,7 @@ def _build_scope():
     rot_txt = (math.radians(90), 0, 0)
     green = _emission("MatTraceIn", (0.2, 1.0, 0.3), 4.0)
     amber = _emission("MatTraceOut", (1.0, 0.6, 0.12), 4.0)
-    _text("ScopeLblIn", "IN Vg1  5 V/div", 0.13, (-1.35, -0.03, 2.18), rot_txt,
+    _text("ScopeLblIn", "IN Vg  5 V/div", 0.13, (-1.35, -0.03, 2.18), rot_txt,
           green, parent=root)
     _text("ScopeGain", "GAIN --", 0.15, (-0.35, -0.03, 2.18), rot_txt,
           amber, parent=root)
@@ -389,7 +396,11 @@ _BAND_RGB = [(0.02, 0.02, 0.02), (0.28, 0.15, 0.06), (0.75, 0.05, 0.03),
 def _resistor(tag, y):
     """Axial resistor with 4 band rings at height 1.95, axis X, offset y."""
     beige = _principled("MatResistor", (0.80, 0.68, 0.50), rough=0.6)
-    wirem = _principled("MatWire", (0.65, 0.55, 0.40), metallic=1.0, rough=0.35)
+    _b = beige.node_tree.nodes.get("Principled BSDF")
+    _b.inputs["Emission Color"].default_value = (0.80, 0.68, 0.50, 1.0)
+    _b.inputs["Emission Strength"].default_value = 0.35
+    wirem = _principled("MatWire", (0.65, 0.55, 0.40), metallic=1.0, rough=0.35,
+                         glow=0.5, glow_color=(0.85, 0.72, 0.5))
     for nm, dx, r, dpt in ((f"ResLeadA{tag}", -0.42, 0.014, 0.24),
                            (f"ResLeadB{tag}", 0.42, 0.014, 0.24),
                            (f"ResBody{tag}", 0.0, 0.085, 0.62)):
@@ -418,6 +429,9 @@ def _recolor_bands(tag, kohms):
             bsdf = m.node_tree.nodes.get("Principled BSDF")
             if bsdf:
                 bsdf.inputs["Base Color"].default_value = (*_BAND_RGB[digit], 1.0)
+                # self-glow so the color code reads on the dark bench
+                bsdf.inputs["Emission Color"].default_value = (*_BAND_RGB[digit], 1.0)
+                bsdf.inputs["Emission Strength"].default_value = 0.6
 
 
 def _upd_rl(self, context):
@@ -453,10 +467,14 @@ def _upd_bypass(self, context):
 
 
 def _build_bench():
-    wirem = _principled("MatWire", (0.65, 0.55, 0.40), metallic=1.0, rough=0.35)
-    dark = _principled("MatPSU", (0.10, 0.12, 0.16), rough=0.5)
-    red = _principled("MatPostR", (0.65, 0.05, 0.04), rough=0.4)
-    blk = _principled("MatPostB", (0.02, 0.02, 0.02), rough=0.4)
+    wirem = _principled("MatWire", (0.65, 0.55, 0.40), metallic=1.0, rough=0.35,
+                         glow=0.5, glow_color=(0.85, 0.72, 0.5))
+    dark = _principled("MatPSU", (0.10, 0.12, 0.16), rough=0.5,
+                        glow=0.35, glow_color=(0.22, 0.22, 0.26))
+    red = _principled("MatPostR", (0.65, 0.05, 0.04), rough=0.4,
+                       glow=0.7, glow_color=(0.85, 0.08, 0.05))
+    blk = _principled("MatPostB", (0.02, 0.02, 0.02), rough=0.4,
+                       glow=0.4, glow_color=(0.25, 0.25, 0.28))
     lbl = _emission("MatLabel", (0.85, 0.9, 1.0), 1.5)
     rot_txt = (math.radians(90), 0, 0)
 
@@ -478,7 +496,8 @@ def _build_bench():
 
     # --- screen bypass capacitor: g2 node down to the common bus
     cap = _cyl("BypCap", 0.10, 0.38, loc=(0.9, 1.30, 1.50), segs=24)
-    cap.data.materials.append(_principled("MatCap", (0.15, 0.25, 0.55),
+    cap.data.materials.append(_principled("MatCap", (0.15, 0.25, 0.55), glow=0.5,
+                                            glow_color=(0.2, 0.35, 0.75),
                                           rough=0.35))
     _text("CapLbl", "C", 0.14, (1.03, 1.30, 1.44), rot_txt, lbl)
     _poly_curve("WireCapTop", [(0.9, 1.30, 1.95), (0.9, 1.30, 1.70)],
@@ -546,7 +565,7 @@ def _push_traces():
 
 # ------------- materials / look ----------------------------------------------
 def _principled(name, color, metallic=0.0, rough=0.5, alpha=1.0, blended=False,
-                spec=None):
+                spec=None, glow=0.0, glow_color=None):
     m = bpy.data.materials.get(PREFIX + name)
     if m is None:
         m = bpy.data.materials.new(PREFIX + name)
@@ -556,6 +575,10 @@ def _principled(name, color, metallic=0.0, rough=0.5, alpha=1.0, blended=False,
     bsdf.inputs["Metallic"].default_value = metallic
     bsdf.inputs["Roughness"].default_value = rough
     bsdf.inputs["Alpha"].default_value = alpha
+    if glow:
+        # self-glow so bench parts read on the emissive-lit dark scene
+        bsdf.inputs["Emission Color"].default_value = (*(glow_color or color), 1.0)
+        bsdf.inputs["Emission Strength"].default_value = glow
     if spec is not None:
         bsdf.inputs["Specular IOR Level"].default_value = spec
     if blended:
@@ -741,6 +764,7 @@ def reset_electrons():
     _S["vg2_byp"] = None
     _S["khat_slow"] = _S.get("khat_slow", 0.0)
     _S["d15_loop"] = _S.get("d15_loop", 0.0)
+    _S["d15_q"] = _S.get("d15_q", deque(maxlen=D15_DELAY + 1))
     _S["emis"] = 1.0
     _S["pc_txt"] = ""
     _push_draw()
@@ -848,7 +872,12 @@ def _push_curves(scene):
         vp = S.get("vp", 300.0)
         ip = (scene.pcv_bplus - vp) / max(scene.pcv_rl, 1e-6)
         dot.location = (float(_pc_x(vp)), -0.06, float(_pc_y(ip)))
-    txt = f"Vg2 = {S.get('vg2', 0.0):.0f} V"
+    bdot = _ob("BiasDot")
+    if bdot is not None:
+        vpq = S.get("vp_ref", 300.0)
+        ipq = (scene.pcv_bplus - vpq) / max(scene.pcv_rl, 1e-6)
+        bdot.location = (float(_pc_x(vpq)), -0.06, float(_pc_y(ipq)))
+    txt = f"Vs = {S.get('vg2', 0.0):.0f} V"
     if txt != S.get("pc_txt", ""):
         t = _ob("PCVg2Val")
         if t:
@@ -916,15 +945,24 @@ def _build_tracer():
     dot.location = (0.0, -0.06, 0.0)
     dot.data.materials.append(_emission("MatOpDot", (1.0, 0.25, 0.2), 6.0))
 
+    # bias-point dot: the DC operating point, parked on the load line while
+    # the hot dot swings around it with the signal
+    bm = bmesh.new()
+    bmesh.ops.create_icosphere(bm, subdivisions=2, radius=0.045)
+    bdot = _mesh_obj("BiasDot", bm)
+    bdot.parent = root
+    bdot.location = (0.0, -0.06, 0.0)
+    bdot.data.materials.append(_emission("MatBiasDot", (1.0, 0.04, 0.04), 2.2))
+
     rot_txt = (math.radians(90), 0, 0)
     green = _emission("MatFamily", (0.18, 0.75, 0.28), 1.6)
     amber = _emission("MatTraceOut", (1.0, 0.6, 0.12), 4.0)
     white = _emission("MatLoadLine", (0.92, 0.92, 1.0), 3.0)
     _text("TracerTitle", "PLATE CHARACTERISTICS", 0.14, (-1.55, -0.03, 1.48),
           rot_txt, white, parent=root)
-    _text("PCVg2Val", "Vg2 = --- V", 0.15, (0.55, -0.03, -1.62),
+    _text("PCVg2Val", "Vs = --- V", 0.15, (0.55, -0.03, -1.62),
           rot_txt, green, parent=root)
-    _text("PCFamLbl", "Ec1 0..-5V (family moves w/ Vg2)", 0.10,
+    _text("PCFamLbl", "Vg 0..-5V (family moves w/ Vs)", 0.10,
           (-1.65, -0.03, -1.62), rot_txt, green, parent=root)
     _text("PCMkX0", "0", 0.09, (-1.55, -0.02, -1.33), rot_txt, white,
           parent=root)
@@ -947,7 +985,10 @@ def _step(scene):
 
     r_all = np.hypot(p[:, 0], p[:, 1])
     cloud = int(np.count_nonzero(al & (r_all < CLOUD_R)))
-    if cloud > CLOUD_CAP and S["ip"] + S.get("ig2", 0.0) < 1.0:
+    # band, not edge: emission gates to ~zero NEAR the cap, so the cloud
+    # can hover a few electrons below CLOUD_CAP forever; the lockup
+    # signature must tolerate that
+    if cloud >= CLOUD_CAP - 25 and S["ip"] + S.get("ig2", 0.0) < 1.0:
         # TRUE space-charge lockup: cloud at cap with zero throughput means
         # emission stays gated (lam *= 1-cf) and the trapped electrons can
         # never drain past the grid-wire barrier -- the tube latches dead.
@@ -955,7 +996,7 @@ def _step(scene):
         # WITH current flowing is normal space-charge-limited operation and
         # is deliberately left alone.
         idx = np.flatnonzero(al & (r_all < CLOUD_R))
-        al[idx[:int(cloud - CLOUD_CAP) + 25]] = False
+        al[idx[:max(int(cloud - CLOUD_CAP) + 25, 10)]] = False
         cloud = int(CLOUD_CAP)
     cf = min(cloud / CLOUD_CAP, 1.2)
 
@@ -979,6 +1020,21 @@ def _step(scene):
 
     def _model(vp, vg2, vg1, cfx):
         d = max(0.0, vg1 + vg2 / MU2 + vp / MUP - V_SC * cfx)
+        # Deliberately NO cloud-choke factor here. Every gated-model
+        # variant tried (linear, exp, logistic, dead-zoned) either
+        # suppressed the verified nominal transfer or made the
+        # solver-particle loop oscillate at deep bias, where the
+        # equilibrium rides the steep part of any gate. The -V_SC*cfx
+        # drive depression must STAY (a cf-free model was tried and
+        # rejected: it starves the solve at high khat, so a poisoned
+        # calibration parks below conduction and the statistics gate
+        # can never reopen -- lockup healing deadlocks). Ungated, the
+        # solve is rock-steady in every regime; the known ceiling is
+        # that a grossly wrong calibration parks quietly at starved
+        # settings and only re-calibrates once bias returns to normal
+        # (where the statistics gate reopens). That is acceptable: the
+        # calibration cannot BECOME wrong at starved settings, because
+        # the same gate keeps it frozen there.
         ik = S["khat"] * emis * d ** 1.5
         ip = ik * (1.0 - S["sfrac"]) * min(1.0, vp / V_KNEE) ** 0.8
         return ip, ik - ip
@@ -1017,10 +1073,11 @@ def _step(scene):
     # whatever the wander happens to be. The live khat is only the
     # accumulator; the circuit sees its slow average. Fast bootstrap so a
     # fresh build still comes up in seconds.
-    # bootstrap fast to 70%, then crawl (tau ~8 s). No band-chasing: under
-    # drive khat carries signal-band ripple, and any fast-follow condition
-    # would hand that ripple to the solves (family breathing with Vg1).
-    a_s = 0.05 if S["khat_slow"] < 0.7 * S["khat"] else 0.005
+    # bootstrap fast to 70%, then crawl (tau ~8 s). The 1.5x down band lets
+    # the slow copy chase a collapsing calibration (lockup bleed) without
+    # chasing signal-band ripple (+-15% at worst) into the solves.
+    ks = S["khat_slow"]
+    a_s = 0.05 if (ks < 0.7 * S["khat"] or ks > 1.5 * S["khat"]) else 0.005
     S["khat_slow"] += a_s * (S["khat"] - S["khat_slow"])
     _k_live = S["khat"]
     S["khat"] = S["khat_slow"]
@@ -1038,26 +1095,68 @@ def _step(scene):
         vg2_sol = _solve_vg2(Vg1, S["cf_slow"])
     vp_sol = _solve_vp(vg2_sol, Vg1, S["cf_slow"])
     S["khat"] = _k_live
+    S["vp_ref"] = vp_ref
 
-    d_dc = max(0.0, scene.pcv_sig_dc + vg2_ref / MU2 + vp_ref / MUP
-               - V_SC * S["cf_slow"])
     # Unbiased perveance estimate: pair the averaged current with the
     # equally-averaged drive^1.5. Pairing it with the DC drive rectifies
     # (the ^1.5 nonlinearity makes <d(t)^1.5> > d_dc^1.5 under signal),
     # which inflated K under drive and crept the operating point.
-    d_now = max(0.0, Vg1 + S["vg2"] / MU2 + S["vp"] / MUP - V_SC * cf)
-    S["d15_loop"] += IK_LOOP_ALPHA * (d_now ** 1.5 - S["d15_loop"])
-    if emis > 0.2 and d_dc > 0.5 and S["d15_loop"] > 0.3:
+    # TIME-ALIGNED: the arrivals feeding ik_loop reflect the drive from
+    # ~a transit ago (measured drive->arrival lag ~24 f at a starved op
+    # point: cathode->plate flight plus the cloud's response), so the
+    # denominator sees the SAME delayed drive via a small ring buffer.
+    # Without this, k_inst = ik_loop/d15_loop transiently reads high on
+    # every Vg2 down-swing (numerator still remembers the old drive)
+    # and khat integrates the phantom.
+    # Cloud term in the PAIRING drive: FAST component only (cf minus
+    # cf_slow); khat absorbs the mean depression at its op point.
+    # - The STATIC -V_SC*cf slope is positive feedback: when the op
+    #   point starves, the cloud swells and deflates the pairing drive
+    #   faster than the (supply-limited) real current falls, so k_inst
+    #   inflates exactly when it should hold. Measured at Rg2=1M,
+    #   -2.16 V: k_inst sat 30..45% ABOVE any khat on the whole
+    #   conducting branch (no fixed point), ratcheting the solve into
+    #   the engine's cloud-collapse fold and back out -- a ~29 s Vg2
+    #   limit cycle. Open-loop khat holds show the same ratchet at the
+    #   dc -3 / 470k nominal point (slower; it parks in choke waves at
+    #   Vg2 ~97). With the static slope removed the same measurements
+    #   give a stable crossing (k_inst = khat) ABOVE the fold at every
+    #   op point tried; the solve then carries a deliberate, steady
+    #   model-under-reality offset (the model's own -V_SC*cf_slow
+    #   share) which acts as the parking brake that keeps starved op
+    #   points out of the fold. That offset is visible as a real-vs-
+    #   load-line residue at low-drive points (see selfcheck).
+    # - The FAST component is kept: cloud flickers hit the measured
+    #   current a transit later, and dividing them out of k_inst keeps
+    #   the calibration quiet about engine choke waves -- fully cf-free
+    #   pairing re-fired a slow deep-bias relaxation cycle and doubled
+    #   khat run-to-run scatter.
+    d_now = max(0.0, Vg1 + S["vg2"] / MU2 + S["vp"] / MUP
+                - V_SC * (cf - S["cf_slow"]))
+    dq = S["d15_q"]
+    dq.append(d_now ** 1.5)
+    S["d15_loop"] += IK_LOOP_ALPHA * (dq[0] - S["d15_loop"])
+    # Gates judge MEASURED reality (averaged drive and current), never the
+    # model's own reference solve: a poisoned calibration starves the model
+    # references, and a gate based on them locks the poison in circularly.
+    if emis > 0.2 and S["d15_loop"] > 0.3:
         k_inst = S["ik_loop"] / (emis * S["d15_loop"])
-        # down-corrections fire ONLY on the lockup signature (cloud pinned
-        # at cap): during warmup ramps k_inst reads low (current lags the
-        # drive through the transit delay) and would wrongly crush khat
-        down_ok = k_inst < S["khat"] and cloud >= CLOUD_CAP - 25
-        if down_ok or (d_dc > 1.5 and S["ik_loop"] > 5.0):
+        # corrections (both directions) only on real statistics: the cloud
+        # reclaim guarantees a latched tube recovers to measurable current,
+        # so no special low-current correction path is needed -- one would
+        # only let transient starved readings crash the calibration.
+        # ik_loop > 30 (was 5): below ~30 arrivals/frame the current is
+        # mid-choke or Poisson-thin and carries no perveance information;
+        # calibrating through choke transients gave each engine choke wave
+        # a khat kick (a "rescue") that re-fired the next wave at deep
+        # bias. Healthy op points (nominal, and the starved-shelf points
+        # at large Rg2) all run 40+ arrivals/frame, and the lockup-heal
+        # path measures ~65 -- both still calibrate.
+        if S["d15_loop"] > 1.0 and S["ik_loop"] > 30.0:
             # bootstrap fast from zero, then track slowly
             a = 0.15 if S["khat"] < 0.7 * k_inst else K_ALPHA
             S["khat"] += a * (k_inst - S["khat"])
-        if d_dc > 1.5 and S["ik_loop"] > 5.0 and S["vp"] > 80.0:
+        if S["d15_loop"] > 1.0 and S["ik_loop"] > 30.0 and S["vp"] > 80.0:
             r_inst = S["ig2_loop"] / S["ik_loop"]
             S["sfrac"] += SF_ALPHA * (min(max(r_inst, 0.15), 0.42) - S["sfrac"])
 
@@ -1211,10 +1310,12 @@ def _step(scene):
         S["gain_txt"] = f"{g:.1f}x"
     else:
         S["gain_txt"] = "--"
-    txt = (f"B+ {Bp:.0f}V   Vg2 {Vg2:.0f}V\n"
-           f"Vp {Vp:.0f}V   Ip {S['ip_show']:.2f}mA\n"
-           f"Ig2 {S['ig2_show']:.2f}mA   Vg1 {Vg1:+.1f}V\n"
-           f"Gain = {S['gain_txt']}")
+    pp_w = Vp * S['ip_show'] / 1000.0      # plate dissipation [W]
+    ps_w = Vg2 * S['ig2_show'] / 1000.0    # screen dissipation [W]
+    txt = (f"B+ {Bp:.0f}V   Gain {S['gain_txt']}\n"
+           f"Vp {Vp:.0f}V   Ip {S['ip_show']:.2f}mA   Pp {pp_w:.2f}W\n"
+           f"Vs {Vg2:.0f}V   Is {S['ig2_show']:.2f}mA   Ps {ps_w:.2f}W\n"
+           f"Vg {Vg1:+.1f}V")
     if txt != S["last_txt"]:
         mo = _ob("Meter")
         if mo:
@@ -1272,9 +1373,15 @@ def _upd_glass(self, context):
 class PCURVES_OT_reset(bpy.types.Operator):
     bl_idname = "pcurves.reset"
     bl_label = "Reset"
-    bl_description = "Clear all electrons and restart the meters"
+    bl_description = ("Restore all sliders to their defaults, clear all "
+                      "electrons, and restart the meters")
 
     def execute(self, context):
+        sc = context.scene
+        for prop in ("pcv_heater_t", "pcv_bplus", "pcv_rl", "pcv_rg2",
+                     "pcv_sig_amp", "pcv_sig_dc", "pcv_g2_bypass",
+                     "pcv_show_glass"):
+            sc.property_unset(prop)   # back to default; update callbacks fire
         reset_electrons()
         return {'FINISHED'}
 
@@ -1329,9 +1436,9 @@ class PCURVES_PT_main(bpy.types.Panel):
         box = L.box()
         box.label(text=f"Vp: {_S.get('vp', 0.0):.0f} V   "
                        f"Ip: {_S.get('ip_show', 0.0):.2f} mA")
-        box.label(text=f"Vg2: {_S.get('vg2', 0.0):.0f} V   "
-                       f"Ig2: {_S.get('ig2_show', 0.0):.2f} mA")
-        box.label(text=f"Vg1: {_S.get('vg1', 0.0):+.1f} V   "
+        box.label(text=f"Vs: {_S.get('vg2', 0.0):.0f} V   "
+                       f"Is: {_S.get('ig2_show', 0.0):.2f} mA")
+        box.label(text=f"Vg: {_S.get('vg1', 0.0):+.1f} V   "
                        f"Gain: {_S.get('gain_txt', '--')}")
         box.label(text=f"Space-charge cloud: {_S.get('cloud', 0)} e-")
 
@@ -1435,11 +1542,12 @@ def register_ui():
 
     if not _ob("Meter"):
         fc = bpy.data.curves.new(PREFIX + "Meter", 'FONT')
-        fc.body = "B+ 300V   Vg2 300V\nVp 300V   Ip 0.00mA\nIg2 0.00mA   Vg1 -3.0V\nGain = --"
+        fc.body = ("B+ 300V   Gain --\nVp 300V   Ip 0.00mA   Pp 0.00W\n"
+                   "Vs 300V   Is 0.00mA   Ps 0.00W\nVg -3.0V")
         fc.size = 0.20
         fc.align_x = 'CENTER'
         mo = _link(bpy.data.objects.new(PREFIX + "Meter", fc))
-        mo.location = (0.0, -1.58, -2.02)
+        mo.location = (0.2, 2.6, 3.1)   # back-center, between scope and tracer
         mo.rotation_euler = (math.radians(90), 0, 0)
         mo.data.materials.append(_emission("MatMeter", (0.3, 1.0, 0.5), 3.0))
 
@@ -1481,9 +1589,11 @@ def selfcheck():
     assert S["vp"] > 0.97 * 300 and S["vg2"] > 0.97 * 300, (
         f"cold but Vp={S['vp']:.0f} Vg2={S['vg2']:.0f}")
 
-    S = run(1100, -3, 0, 300, 100, 470, 1500, byp=False)  # settle: khat_slow crawl needs ~1400f
+    S = run(1100, -3, 0, 300, 100, 470, 4500, byp=False)  # settle: khat_slow crawl
     # (long: calibration persists across resets, so the starting K can be
-    # far from this op point's value after other runs)
+    # far from this op point's value after other runs; extended 1500->4500
+    # for the fast-cf-only pairing, whose khat converges to a different
+    # level and crawls further before the op point parks)
     vp0, vg20 = S["vp"], S["vg2"]
     ip0, ig20 = S["ik_loop"] - S["ig2_loop"], S["ig2_loop"]
     assert 0.30 * 300 < vp0 < 0.92 * 300, f"bad plate op point Vp={vp0:.0f}"
@@ -1491,7 +1601,14 @@ def selfcheck():
     kvl_p = abs(300.0 - vp0 - (ip0 * MA_PER_E) * 100.0)
     kvl_s = abs(300.0 - vg20 - (ig20 * MA_PER_E) * 470.0)
     assert kvl_p < 30.0, f"plate load line off by {kvl_p:.1f} V"
-    assert kvl_s < 40.0, f"screen load line off by {kvl_s:.1f} V"
+    # Screen KVL bound 40 -> 70 V: this op point's REAL load-line
+    # intersection sits inside the engine's cloud-choke fold, so the old
+    # fully-consistent calibration rode choke waves here (measured kvl_s
+    # swinging 12..84 V; the old 40 V bound passed only by wave-phase luck
+    # at the settle end). The fast-cf pairing parks the solve ABOVE the
+    # fold instead -- quiet, but with a deliberate steady ~50 V brake
+    # offset between real screen current and the solved load line.
+    assert kvl_s < 70.0, f"screen load line off by {kvl_s:.1f} V"
     assert float(np.std(S["vp_buf"][-24:])) < 6.0, "plate loop ringing"
 
     vp_neg = run(1100, -7, 0, 300, 100, 470, 340, byp=False)["vp"]  # inverting

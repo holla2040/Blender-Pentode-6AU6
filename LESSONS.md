@@ -241,9 +241,9 @@ and the Vg2 readout for a few cycles. Then check the bypass box
 mid-signal.
 
 **Watch:** unbypassed, the *entire plate-characteristics family breathes*
-— down to Vg2 ≈ 99 V on the hot half-cycle, up to ≈ 154 V on the cold
-one — while the load line and dot do their usual dance. Gain reads ~3×.
-Check the box: the family parks, gain leaps to ~30×.
+— down to Vg2 ≈ 113 V on the hot half-cycle, up to ≈ 164 V on the cold
+one — while the load line and dot do their usual dance. Gain reads ~4×.
+Check the box: the family parks, gain leaps to ~16×.
 
 **The point:** the unbypassed screen is negative feedback applied *by the
 tube's own current, at signal speed, on both half-cycles* — it throttles
