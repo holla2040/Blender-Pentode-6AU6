@@ -1,0 +1,7 @@
+# Original Prompt
+
+As given on 2026-07-05, verbatim:
+
+```text
+switch to Blender-Pentode-6AU6 dir, look at docs/6AU6A.pdf, there are 2 plots for pentode connection on bottom of page 3 and top of page 4 entitled "average plate characteristics" the first one varies Ec1 (the grid voltage) from -5.0 to 0 volts while holding Ec2 (the screen voltage) at 150 volts. The seconds holds Ec1  (the grid voltage) at 0 volts while varying the Ec2 (the screen voltage) from 50 to 150 Volts. These are 2 very important and often misunderstood in the vacuum tube design world. However, the second plot is particularly interesting if you remove the screen bypass capacitor. When the plate current rises the plate voltage drops due to the plate resistance. At the same time, the screen current rises and the screen voltage drops to the screen resistance. This drop in screen voltage effectively compresses plot 2 lines in a downward fashion. During this time, the load line established by plate resistance and B+ is not really moving but the plate characteristic plot lines move up and down with plate and screen current. I'd like another blender animation showing this affect. In addition to the scope plot. I'd like a dynamic Plate Characteristic plot where the plot line position is a function of the screen voltage, which varies with plate and screen current. This plate characteristic needs to also have a static line that represents the load line.
+```
