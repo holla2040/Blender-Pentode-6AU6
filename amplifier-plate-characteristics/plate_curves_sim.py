@@ -943,11 +943,13 @@ def _step(scene):
 
     r_all = np.hypot(p[:, 0], p[:, 1])
     cloud = int(np.count_nonzero(al & (r_all < CLOUD_R)))
-    if cloud > CLOUD_CAP:
-        # Space charge saturated: the cathode reclaims the excess. Without
-        # this, a transient can fill the cloud to the cap, emission shuts
-        # off (lam *= 1-cf), and the trapped electrons hover behind the g1
-        # wire barrier forever -- a lockup that latches the tube dead.
+    if cloud > CLOUD_CAP and S["ip"] + S.get("ig2", 0.0) < 1.0:
+        # TRUE space-charge lockup: cloud at cap with zero throughput means
+        # emission stays gated (lam *= 1-cf) and the trapped electrons can
+        # never drain past the grid-wire barrier -- the tube latches dead.
+        # Reclaim them into the cathode to break the latch. A full cloud
+        # WITH current flowing is normal space-charge-limited operation and
+        # is deliberately left alone.
         idx = np.flatnonzero(al & (r_all < CLOUD_R))
         al[idx[:int(cloud - CLOUD_CAP) + 25]] = False
         cloud = int(CLOUD_CAP)
@@ -976,7 +978,11 @@ def _step(scene):
     drive_now = Vg1 + S["vg2"] / MU2 + S["vp"] / MUP - V_SC * cf
     if emis > 0.2 and drive_now > 0.5:
         k_inst = S["ik_loop"] / (emis * drive_now ** 1.5)
-        if k_inst < S["khat"] or (drive_now > 1.5 and S["ik_loop"] > 5.0):
+        # down-corrections fire ONLY on the lockup signature (cloud pinned
+        # at cap): during warmup ramps k_inst reads low (current lags the
+        # drive through the transit delay) and would wrongly crush khat
+        down_ok = k_inst < S["khat"] and cloud >= CLOUD_CAP - 25
+        if down_ok or (drive_now > 1.5 and S["ik_loop"] > 5.0):
             # bootstrap fast from zero, then track slowly
             a = 0.15 if S["khat"] < 0.7 * k_inst else K_ALPHA
             S["khat"] += a * (k_inst - S["khat"])

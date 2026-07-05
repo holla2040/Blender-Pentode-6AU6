@@ -817,6 +817,16 @@ def _step(scene):
 
     r_all = np.hypot(p[:, 0], p[:, 1])
     cloud = int(np.count_nonzero(al & (r_all < CLOUD_R)))
+    if cloud > CLOUD_CAP and S["ip"] + S.get("ig2", 0.0) < 1.0:
+        # TRUE space-charge lockup: cloud at cap with zero throughput means
+        # emission stays gated (lam *= 1-cf) and the trapped electrons can
+        # never drain past the grid-wire barrier -- the tube latches dead.
+        # Reclaim them into the cathode to break the latch. A full cloud
+        # WITH current flowing is normal space-charge-limited operation and
+        # is deliberately left alone.
+        idx = np.flatnonzero(al & (r_all < CLOUD_R))
+        al[idx[:int(cloud - CLOUD_CAP) + 25]] = False
+        cloud = int(CLOUD_CAP)
     cf = min(cloud / CLOUD_CAP, 1.2)
 
     # --- the circuit: SELF-BIAS pentode RC stage. Cathode current (Ip+Ig2)
@@ -891,11 +901,19 @@ def _step(scene):
     vk_dc, vg2_dc, vp_dc, ip_dc, ig2_dc = _solve_all(scene.pcb_sig_dc)
     d_dc = max(0.0, (scene.pcb_sig_dc - vk_dc) + vg2_dc / MU2
                + vp_dc / MUP - V_SC * cf)
-    if d_dc > 1.5 and S["ik_loop"] > 5.0 and emis > 0.2:
+    # Down-corrections always allowed (see the plate-characteristics build:
+    # a poisoned-high khat starves the op point, closes the healthy-drive
+    # gate, and can otherwise never heal).
+    if emis > 0.2 and d_dc > 0.5:
         k_inst = S["ik_loop"] / (emis * d_dc ** 1.5)
-        a = 0.15 if S["khat"] < 0.7 * k_inst else K_ALPHA
-        S["khat"] += a * (k_inst - S["khat"])
-        if vp_dc > 80.0:
+        # down-corrections fire ONLY on the lockup signature (cloud pinned
+        # at cap): during warmup ramps k_inst reads low (current lags the
+        # drive through the transit delay) and would wrongly crush khat
+        down_ok = k_inst < S["khat"] and cloud >= CLOUD_CAP - 25
+        if down_ok or (d_dc > 1.5 and S["ik_loop"] > 5.0):
+            a = 0.15 if S["khat"] < 0.7 * k_inst else K_ALPHA
+            S["khat"] += a * (k_inst - S["khat"])
+        if d_dc > 1.5 and S["ik_loop"] > 5.0 and vp_dc > 80.0:
             r_inst = S["ig2_loop"] / S["ik_loop"]
             S["sfrac"] += SF_ALPHA * (min(max(r_inst, 0.15), 0.55) - S["sfrac"])
 

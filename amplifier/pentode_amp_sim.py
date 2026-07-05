@@ -769,6 +769,16 @@ def _step(scene):
 
     r_all = np.hypot(p[:, 0], p[:, 1])
     cloud = int(np.count_nonzero(al & (r_all < CLOUD_R)))
+    if cloud > CLOUD_CAP and S["ip"] + S.get("ig2", 0.0) < 1.0:
+        # TRUE space-charge lockup: cloud at cap with zero throughput means
+        # emission stays gated (lam *= 1-cf) and the trapped electrons can
+        # never drain past the grid-wire barrier -- the tube latches dead.
+        # Reclaim them into the cathode to break the latch. A full cloud
+        # WITH current flowing is normal space-charge-limited operation and
+        # is deliberately left alone.
+        idx = np.flatnonzero(al & (r_all < CLOUD_R))
+        al[idx[:int(cloud - CLOUD_CAP) + 25]] = False
+        cloud = int(CLOUD_CAP)
     cf = min(cloud / CLOUD_CAP, 1.2)
 
     # --- the circuit: generator on g1; Vp AND Vg2 each ride a load line,
@@ -784,14 +794,22 @@ def _step(scene):
     # the model knows about emission, so a cold cathode solves to Vp=Vg2=B+
     emis = min(1.0, math.exp(-T_SLOPE * (1.0 / T - 1.0 / T_REF)))
 
-    # calibrate only on healthy signal (weak-drive stats poison the fit)
+    # Calibration. Up-corrections only on healthy drive (weak-drive stats
+    # poison the fit) -- but DOWN-corrections are always allowed: if khat is
+    # stuck too high after a starved transient, the solver holds a starved
+    # op point, the gate would stay closed, and khat could never heal.
     drive_now = Vg1 + S["vg2"] / MU2 + S["vp"] / MUP - V_SC * cf
-    if drive_now > 1.5 and S["ik_loop"] > 5.0 and emis > 0.2:
+    if emis > 0.2 and drive_now > 0.5:
         k_inst = S["ik_loop"] / (emis * drive_now ** 1.5)
-        # bootstrap fast from zero, then track slowly
-        a = 0.15 if S["khat"] < 0.7 * k_inst else K_ALPHA
-        S["khat"] += a * (k_inst - S["khat"])
-        if S["vp"] > 80.0:
+        # down-corrections fire ONLY on the lockup signature (cloud pinned
+        # at cap): during warmup ramps k_inst reads low (current lags the
+        # drive through the transit delay) and would wrongly crush khat
+        down_ok = k_inst < S["khat"] and cloud >= CLOUD_CAP - 25
+        if down_ok or (drive_now > 1.5 and S["ik_loop"] > 5.0):
+            # bootstrap fast from zero, then track slowly
+            a = 0.15 if S["khat"] < 0.7 * k_inst else K_ALPHA
+            S["khat"] += a * (k_inst - S["khat"])
+        if drive_now > 1.5 and S["ik_loop"] > 5.0 and S["vp"] > 80.0:
             r_inst = S["ig2_loop"] / S["ik_loop"]
             S["sfrac"] += SF_ALPHA * (min(max(r_inst, 0.15), 0.55) - S["sfrac"])
 
