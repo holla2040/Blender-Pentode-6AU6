@@ -25,7 +25,7 @@ and the sagging screen slides your operating curve down the page-4 family —
   instantaneous (Vg1, Vg2), recomputed every frame from the same calibrated
   model the circuit solver uses. It swings with the grid (page-3 motion)
   and compresses with the screen (page-4 motion). At the demo defaults
-  Vg2 swings ~50 V per cycle — the curve visibly breathes between the
+  Vg2 swings ~50 V per cycle (unbypassed) — the curve visibly breathes between the
   family's upper curves and its floor.
 - **Static white LOAD LINE** — from (B+, 0) to (0, B+/R_L), clipped to the
   plot; redrawn only when you move the B+ or R_L sliders, deliberately
@@ -53,8 +53,7 @@ tetrode toggle). Scope, meters, and glass toggle inherited.
    curve dives ~50 V worth of Vg2 every cycle; the dot slides along the
    unmoving white line.
 2. **Freeze it**: check the bypass box — Vg2 pins, the curve stops
-   breathing vertically and only steps with the grid, gain jumps (~4× →
-   ~30×). This is what the capacitor is *for*.
+   breathing vertically and only steps with the grid, gain jumps (~3× → ~32×). This is what the capacitor is *for*.
 3. **Move the load line** (the only way it moves): drag B+ or R_L — the
    white line pivots, the dot finds the new intersection, the curves are
    unaffected. Field lines vs circuit lines, cleanly separated.

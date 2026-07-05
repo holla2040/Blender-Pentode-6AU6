@@ -37,7 +37,8 @@ R_C = 0.15                     # cathode outer radius
 G1 = dict(r=0.33, pitch=0.085, wire=0.010, rod=0.022, rod_ang=0.0,
           kw=0.002, cap=0.014)
 G2 = dict(r=0.55, pitch=0.140, wire=0.012, rod=0.026, rod_ang=90.0,
-          kw=0.0006, cap=0.011)   # weaker pull: real screens sit in g1's shadow
+          kw=0.0006, cap=0.0095)   # capture calibrated to the 6AU6-A datasheet:
+                                   # Ic2/Icathode ~ 0.27-0.31 (docs/6AU6A.pdf p3-4)
 G3 = dict(r=0.80, pitch=0.340, wire=0.014, rod=0.030, rod_ang=45.0,
           kw=0.002, cap=0.016)
 PLATE_A = 1.00                 # superellipse x semi-axis (inradius)
@@ -712,7 +713,11 @@ def reset_electrons():
     _S["vg2"] = _S["vp"]                                        # both at B+
     _S["vg1"] = float(getattr(_scene(), "pamp_sig_dc", -3.0))
     _S["khat"] = _S.get("khat", 0.0)    # calibration persists across resets
-    _S["sfrac"] = _S.get("sfrac", 0.35)
+    _S["khat_slow"] = _S.get("khat_slow", 0.0)
+    _S["d15_loop"] = _S.get("d15_loop", 0.0)
+    _S["sfrac"] = _S.get("sfrac", 0.28)   # datasheet Ic2/Ik
+    _S["cf_slow"] = 0.5
+    _S["vg2_byp"] = None
     _S["ik_loop"] = 0.0
     _S["ig2_loop"] = 0.0
     _S["ip_show"] = 0.0
@@ -780,6 +785,7 @@ def _step(scene):
         al[idx[:int(cloud - CLOUD_CAP) + 25]] = False
         cloud = int(CLOUD_CAP)
     cf = min(cloud / CLOUD_CAP, 1.2)
+    S["cf_slow"] = S.get("cf_slow", 0.5) + 0.02 * (cf - S.get("cf_slow", 0.5))
 
     # --- the circuit: generator on g1; Vp AND Vg2 each ride a load line,
     # solved by nested bisection against a companion model calibrated from
@@ -794,46 +800,29 @@ def _step(scene):
     # the model knows about emission, so a cold cathode solves to Vp=Vg2=B+
     emis = min(1.0, math.exp(-T_SLOPE * (1.0 / T - 1.0 / T_REF)))
 
-    # Calibration. Up-corrections only on healthy drive (weak-drive stats
-    # poison the fit) -- but DOWN-corrections are always allowed: if khat is
-    # stuck too high after a starved transient, the solver holds a starved
-    # op point, the gate would stay closed, and khat could never heal.
-    drive_now = Vg1 + S["vg2"] / MU2 + S["vp"] / MUP - V_SC * cf
-    if emis > 0.2 and drive_now > 0.5:
-        k_inst = S["ik_loop"] / (emis * drive_now ** 1.5)
-        # down-corrections fire ONLY on the lockup signature (cloud pinned
-        # at cap): during warmup ramps k_inst reads low (current lags the
-        # drive through the transit delay) and would wrongly crush khat
-        down_ok = k_inst < S["khat"] and cloud >= CLOUD_CAP - 25
-        if down_ok or (drive_now > 1.5 and S["ik_loop"] > 5.0):
-            # bootstrap fast from zero, then track slowly
-            a = 0.15 if S["khat"] < 0.7 * k_inst else K_ALPHA
-            S["khat"] += a * (k_inst - S["khat"])
-        if drive_now > 1.5 and S["ik_loop"] > 5.0 and S["vp"] > 80.0:
-            r_inst = S["ig2_loop"] / S["ik_loop"]
-            S["sfrac"] += SF_ALPHA * (min(max(r_inst, 0.15), 0.55) - S["sfrac"])
-
-    def _model(vp, vg2, vg1):
-        d = max(0.0, vg1 + vg2 / MU2 + vp / MUP - V_SC * cf)
+    def _model(vp, vg2, vg1, cfx):
+        d = max(0.0, vg1 + vg2 / MU2 + vp / MUP - V_SC * cfx)
         ik = S["khat"] * emis * d ** 1.5
         ip = ik * (1.0 - S["sfrac"]) * min(1.0, vp / V_KNEE) ** 0.8
         return ip, ik - ip
 
-    def _solve_vp(vg2, vg1):
+    def _solve_vp(vg2, vg1, cfx=None):
+        c = cf if cfx is None else cfx
         lo, hi = 0.0, Bp
         for _ in range(22):
             mid = 0.5 * (lo + hi)
-            if Bp - RL * MA_PER_E * _model(mid, vg2, vg1)[0] - mid > 0.0:
+            if Bp - RL * MA_PER_E * _model(mid, vg2, vg1, c)[0] - mid > 0.0:
                 lo = mid
             else:
                 hi = mid
         return 0.5 * (lo + hi)
 
-    def _solve_vg2(vg1):
+    def _solve_vg2(vg1, cfx=None):
+        c = cf if cfx is None else cfx
         lo2, hi2 = 0.0, Bp
         for _ in range(22):
             mid2 = 0.5 * (lo2 + hi2)
-            ig2_m = _model(_solve_vp(mid2, vg1), mid2, vg1)[1]
+            ig2_m = _model(_solve_vp(mid2, vg1, c), mid2, vg1, c)[1]
             if Bp - RG2 * MA_PER_E * ig2_m - mid2 > 0.0:
                 lo2 = mid2
             else:
@@ -844,8 +833,42 @@ def _step(scene):
     # those ring against the transit delay). The bypass cap decides only which
     # grid voltage the SCREEN line sees: the DC bias (bypassed: capacitor
     # holds the average, no signal ripple) or the live signal (unbypassed).
-    vg1_screen = scene.pamp_sig_dc if scene.pamp_g2_bypass else Vg1
-    vg2_sol = _solve_vg2(vg1_screen)
+    # DC reference (slow calibration copy + slow space charge): anchors the
+    # calibration and is the node the bypass capacitor holds
+    S["khat_slow"] += 0.02 * (S["khat"] - S["khat_slow"])
+    _k_live = S["khat"]
+    S["khat"] = S["khat_slow"]
+    vg2_ref = _solve_vg2(scene.pamp_sig_dc, S["cf_slow"])
+    vp_ref = _solve_vp(vg2_ref, scene.pamp_sig_dc, S["cf_slow"])
+    S["khat"] = _k_live
+    d_dc = max(0.0, scene.pamp_sig_dc + vg2_ref / MU2 + vp_ref / MUP
+               - V_SC * S["cf_slow"])
+    # unbiased perveance: averaged current over equally-averaged drive^1.5
+    # (pairing averaged current with the DC drive rectifies through the ^1.5
+    # nonlinearity and creeps the operating point under signal)
+    d_now = max(0.0, Vg1 + S["vg2"] / MU2 + S["vp"] / MUP - V_SC * cf)
+    S["d15_loop"] += IK_LOOP_ALPHA * (d_now ** 1.5 - S["d15_loop"])
+    if emis > 0.2 and d_dc > 0.5 and S["d15_loop"] > 0.3:
+        k_inst = S["ik_loop"] / (emis * S["d15_loop"])
+        # down-corrections only on the lockup signature (see backport notes)
+        down_ok = k_inst < S["khat"] and cloud >= CLOUD_CAP - 25
+        if down_ok or (d_dc > 1.5 and S["ik_loop"] > 5.0):
+            a = 0.15 if S["khat"] < 0.7 * k_inst else K_ALPHA
+            S["khat"] += a * (k_inst - S["khat"])
+        if d_dc > 1.5 and S["ik_loop"] > 5.0 and S["vp"] > 80.0:
+            r_inst = S["ig2_loop"] / S["ik_loop"]
+            S["sfrac"] += SF_ALPHA * (min(max(r_inst, 0.15), 0.42) - S["sfrac"])
+
+    if scene.pamp_g2_bypass:
+        # Fully bypassed: the capacitor supplies the ripple current and the
+        # screen node HOLDS its DC value (pole far below the signal); the
+        # slow filter is just the cap recharging when sliders move
+        if S["vg2_byp"] is None:
+            S["vg2_byp"] = vg2_ref
+        S["vg2_byp"] += 0.008 * (vg2_ref - S["vg2_byp"])
+        vg2_sol = S["vg2_byp"]
+    else:
+        vg2_sol = _solve_vg2(Vg1)
     vp_sol = _solve_vp(vg2_sol, Vg1)
 
     S["vg2"] += VP_SMOOTH * (vg2_sol - S["vg2"])
@@ -1282,7 +1305,7 @@ def selfcheck():
     assert S["vp"] > 0.97 * 300 and S["vg2"] > 0.97 * 300, (
         f"cold but Vp={S['vp']:.0f} Vg2={S['vg2']:.0f}")
 
-    S = run(1100, -3, 0, 300, 100, 470, 550)    # settle on both load lines
+    S = run(1100, -3, 0, 300, 100, 470, 700, byp=False)  # settle (no cap lag)
     vp0, vg20 = S["vp"], S["vg2"]
     ip0, ig20 = S["ik_loop"] - S["ig2_loop"], S["ig2_loop"]
     assert 0.30 * 300 < vp0 < 0.92 * 300, f"bad plate op point Vp={vp0:.0f}"
@@ -1293,18 +1316,18 @@ def selfcheck():
     assert kvl_s < 40.0, f"screen load line off by {kvl_s:.1f} V"
     assert float(np.std(S["vp_buf"][-24:])) < 6.0, "plate loop ringing"
 
-    vp_neg = run(1100, -7, 0, 300, 100, 470, 340)["vp"]   # inverting stage
-    vp_pos = run(1100, -1, 0, 300, 100, 470, 340)["vp"]
+    vp_neg = run(1100, -7, 0, 300, 100, 470, 340, byp=False)["vp"]  # inverting
+    vp_pos = run(1100, -1, 0, 300, 100, 470, 340, byp=False)["vp"]
     assert vp_neg > vp0 > vp_pos, (
         f"not inverting: {vp_neg:.0f} > {vp0:.0f} > {vp_pos:.0f} expected")
 
-    S = run(1100, -3, 0.5, 300, 100, 470, 460)  # small-signal gain, bypassed
+    S = run(1100, -3, 0.5, 300, 100, 470, 760)  # small-signal gain, bypassed
     g100 = float(np.std(S["vp_buf"]) / max(float(np.std(S["vg_buf"])), 1e-6))
     corr = float(np.corrcoef(S["vg_buf"], S["vp_buf"])[0, 1])
     assert 12.0 < g100 < 70.0, f"gain {g100:.1f} out of range"
     assert corr < -0.7, f"output not inverted (corr={corr:.2f})"
 
-    S = run(1100, -3, 0.5, 300, 300, 470, 460)  # pentode signature: gain ~ RL
+    S = run(1100, -3, 0.5, 300, 300, 470, 760)  # pentode signature: gain ~ RL
     g300 = float(np.std(S["vp_buf"]) / max(float(np.std(S["vg_buf"])), 1e-6))
     assert g300 > 1.6 * g100, (
         f"gain should scale with RL: {g300:.1f} !> 1.6x{g100:.1f}")
@@ -1314,7 +1337,7 @@ def selfcheck():
     assert g100 > 1.25 * g_unbyp, (
         f"unbypassed screen should cut gain: {g100:.1f} !> 1.25x{g_unbyp:.1f}")
 
-    S = run(1100, -3, 4, 300, 100, 470, 460)    # overdrive: cutoff clipping
+    S = run(1100, -3, 4, 300, 100, 470, 760)    # overdrive: cutoff clipping
     assert float(np.max(S["vp_buf"][-192:])) > 0.9 * 300, "no cutoff clipping"
 
     # kink needs Vp below Vg2: high Vg2 (small Rg2) + low Vp (big RL).

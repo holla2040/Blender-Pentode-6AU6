@@ -14,8 +14,8 @@ schematic has, and **no bias supplies anywhere**.
 **Three coupled self-regulating loops**, solved together every frame:
 cathode bias (`Vk = (Ip + Ig2)·R_k` — note the cathode carries *both*
 currents), screen sag (`Vg2 = B+ − Ig2·R_g2`), and the plate load line.
-At the defaults the stage biases itself to Vk ≈ 1.1 V, Vg2 ≈ 130 V,
-Vp ≈ 220 V with the DC offset at zero — textbook 6AU6 numbers.
+At the defaults the stage biases itself to Vk ≈ 1.1 V, Vg2 ≈ 145 V,
+Vp ≈ 222 V with the DC offset at zero — textbook 6AU6 numbers.
 
 ## The lessons (beyond the parent projects)
 
@@ -24,11 +24,10 @@ Vp ≈ 220 V with the DC offset at zero — textbook 6AU6 numbers.
    tube, so less screen current, so less sag. Three regulators, one stable
    operating point.
 2. **Two feedbacks, separated**: uncheck the **cathode** bypass → series
-   feedback, gain 15.7× → 13.7×. Uncheck the **screen** bypass instead →
-   gain collapses to 9.5×. Both at once compound. The green Vg1k trace
+   feedback, gain 16.4× → 11.0×. Uncheck the **screen** bypass instead →
+   gain collapses to ~6×. Both at once compound. The green Vg1k trace
    shows the cathode feedback eating the drive in real time.
-3. **Still a pentode**: gain scales with R_L (15.7× at 100k → 41.7× at
-   300k) even with all the self-bias machinery in circuit.
+3. **Still a pentode**: gain scales with R_L (~16× at 100k → ~39× at 300k) even with all the self-bias machinery in circuit.
 4. **Asymmetric overdrive, pentode edition**: at A = 8 the top **rails
    clean at B+** (with the screen bypassed at ~130 V, cutoff needs only
    ≈ −8 V — compare the self-biased triode, which can't cut off at all),

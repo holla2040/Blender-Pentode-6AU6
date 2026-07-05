@@ -21,9 +21,9 @@ current. The measured numbers all satisfy Ohm's law and KVL.
 
 | Lesson | Triode amp | This stage |
 |---|---|---|
-| Gain | pinned near μ ≈ 13× no matter the load | **~30× at 100k → ~68× at 300k** — gain ≈ gm·R_L, scales with the resistor |
+| Gain | pinned near μ ≈ 13× no matter the load | **~32× at 100k → ~97× at 300k** — gain ≈ gm·R_L, scales with the resistor |
 | Screen supply | — | R_g2 starves the screen to ~90–100 V at the default 470k — authentic RC-stage practice, and self-protective: run the tube hot and Vg2 sags |
-| Bypass capacitor | — | uncheck **Screen bypass** and gain collapses ~30× → ~9×: the unbypassed screen ripples in anti-phase and steals the signal |
+| Bypass capacitor | — | uncheck **Screen bypass** and gain collapses ~32× → ~2–4×: the unbypassed screen ripples in anti-phase and steals the signal |
 | Cutoff | −9 V kills it | at −9 V the screen **rises to B+ and pulls the tube back on** — screen-resistor self-bias fights cutoff |
 | Distortion demo | grid-current clipping | uncheck **Suppressor connected** at Vp < Vg2: hundreds of orange secondaries stream plate→screen mid-cycle and the waveform kinks |
 
@@ -58,11 +58,13 @@ Meter and panel show B+, Vg2, Vp, Ip, Ig2, Vg1, gain — all KVL-consistent.
 2. **Watch it bias itself**: heat the cathode; the plate settles mid-supply
    while the screen sags deep (~95 V at 470k) — the screen resistor finds
    its own operating point.
-3. **Gain vs load**: A = 0.5 V; read gain ~30× at R_L = 100k, then slide to
-   300k → ~68×. Try that on the triode amp: it barely moves. This is why
+3. **Gain vs load**: A = 0.5 V; read gain ~32× at R_L = 100k, then slide to
+   300k → ~97×. Try that on the triode amp: it barely moves. This is why
    pentodes were the high-gain voltage stage.
-4. **The bypass capacitor**: uncheck Screen bypass → gain collapses to ~9×.
-   Watch Vg2 on the meter ripple against the input. Re-check: full gain.
+4. **The bypass capacitor**: uncheck Screen bypass → gain collapses to ~2–4×.
+   Watch Vg2 on the meter ripple against the input. Re-check it and Vg2
+   HOLDS at its DC value (the capacitor supplies the ripple current): full
+   gain returns.
 5. **Overdrive**: A = 4 → flat top at B+ (cutoff side), bottom limited near
    the pentode knee, screen sagging on the hot half-cycle.
 6. **Why the suppressor exists**: R_L 300k, R_g2 150k (Vp ≈ 145 < Vg2 ≈ 185),

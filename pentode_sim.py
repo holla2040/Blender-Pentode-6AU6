@@ -35,7 +35,8 @@ R_C = 0.15                     # cathode outer radius
 G1 = dict(r=0.33, pitch=0.085, wire=0.010, rod=0.022, rod_ang=0.0,
           kw=0.002, cap=0.014)
 G2 = dict(r=0.55, pitch=0.140, wire=0.012, rod=0.026, rod_ang=90.0,
-          kw=0.0006, cap=0.013)   # weaker pull: real screens sit in g1's shadow
+          kw=0.0006, cap=0.0095)   # capture calibrated to the 6AU6-A datasheet:
+                                   # Ic2/Icathode ~ 0.27-0.31 (docs/6AU6A.pdf p3-4)
 G3 = dict(r=0.80, pitch=0.340, wire=0.014, rod=0.030, rod_ang=45.0,
           kw=0.002, cap=0.016)
 PLATE_A = 1.00                 # superellipse x semi-axis (inradius)

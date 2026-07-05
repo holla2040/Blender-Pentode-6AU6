@@ -52,7 +52,7 @@ Meters: in-scene glowing text + panel rows for **Ip (plate)** and **Ig2
 1. **Cold tube**: T = 500 K → nothing, at any voltages.
 2. **Screen off**: Vg2 = 0, Vp = 300 → still nothing. The plate can't reach
    the cathode; the screen is the accelerator.
-3. **Nominal**: Vg2 = 150, Vp = 250 → strong flow; note Ig2 ≈ ⅓–½ of Ip
+3. **Nominal**: Vg2 = 150, Vp = 250 → strong flow; note Ig2 ≈ ¼–⅓ of Ip (capture calibrated to the datasheet's Ic2 curves)
    (electrons caught by screen wires sparkle on the silver helix).
 4. **Pentode flatness**: drag Vp from 250 down to 80 → Ip barely moves.
    That's the screen isolating the cathode — and why a pentode makes a good
