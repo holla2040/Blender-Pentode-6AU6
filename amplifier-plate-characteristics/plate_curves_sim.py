@@ -860,6 +860,19 @@ def _update_load_line(scene=None):
     _write_pc_spline("LoadLine", xs, ys)
 
 
+def _ensure_fam_labels():
+    """Per-curve Vg labels parked at the right end of each family curve.
+    Safe to call on an already-built scene: _text reuses existing objects."""
+    root = _ob("TracerRoot")
+    if root is None:
+        return
+    green = _emission("MatFamily", (0.18, 0.75, 0.28), 1.6)
+    rot_txt = (math.radians(90), 0, 0)
+    for i, ec1 in enumerate(PC_FAMILY_EC1):
+        _text(f"FamLbl{i}", f"{ec1:.0f}", 0.085,
+              (PC_W / 2 + 0.06, -0.03, 0.0), rot_txt, green, parent=root)
+
+
 def _push_curves(scene):
     """Per-frame: the family (at the live screen voltage), dot, Vg2 readout."""
     S = _S
@@ -867,6 +880,9 @@ def _push_curves(scene):
     for i, ec1 in enumerate(PC_FAMILY_EC1):
         ys = _pc_model_ma(PC_VPS_F, ec1, vg2_now, cf=S.get("cf_slow", 0.5))
         _write_pc_spline(f"FamCurve{i}", _pc_x(PC_VPS_F), _pc_y(ys))
+        lbl = _ob(f"FamLbl{i}")
+        if lbl is not None:
+            lbl.location.z = float(_pc_y(ys[-1])) - 0.04
     dot = _ob("OpDot")
     if dot is not None:
         vp = S.get("vp", 300.0)
@@ -970,6 +986,7 @@ def _build_tracer():
           white, parent=root)
     _text("PCMkY1", "4mA (0.5/div)", 0.09, (-1.62, -0.02, 1.23), rot_txt,
           white, parent=root)
+    _ensure_fam_labels()
 
 
 def _step(scene):
@@ -1353,6 +1370,7 @@ def _remove_handlers():
 
 def register_sim():
     _remove_handlers()
+    _ensure_fam_labels()   # backfill labels on blends built before they existed
     bpy.app.handlers.frame_change_pre.append(amp_pcv_frame_change)
     if "pos" not in _S:
         reset_electrons()
